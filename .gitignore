@@ -1,0 +1,10 @@
+target/
+*.class
+.idea/
+*.iml
+.vscode/
+.DS_Store
+*.log
+
+# Local secrets (Google OAuth client id/secret). Never commit these.
+.env

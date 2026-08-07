@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BookCanada</title>
+  <link rel="stylesheet" href="/css/fonts.css">
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <header class="site">
+    <div class="header-inner">
+      <a class="brand" href="/index.html"><span class="logo">🏨</span> BookCanada</a>
+      <div class="auth-widget" id="authWidget"></div>
+    </div>
+  </header>
+
+  <div class="hero">
+    <div class="hero-inner">
+      <p class="eyebrow">Canada's Hotel Collection</p>
+      <h1>Reserve your stay <em>in Canada</em></h1>
+      <p>Toronto, Niagara Falls, Montreal, Banff, Vancouver, and Blue Mountain.</p>
+
+      <form class="search-card" id="searchForm">
+        <div class="field">
+          <label for="location">Location</label>
+          <select id="location" name="location">
+            <option value="">Any destination</option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="checkIn">Check-in</label>
+          <input type="date" id="checkIn" name="checkIn" required>
+        </div>
+        <div class="field">
+          <label for="checkOut">Check-out</label>
+          <input type="date" id="checkOut" name="checkOut" required>
+        </div>
+        <div class="field">
+          <label for="rooms">Rooms</label>
+          <input type="number" id="rooms" name="rooms" min="1" max="10" value="1" required>
+        </div>
+        <div class="field">
+          <label for="guests">Guests</label>
+          <input type="number" id="guests" name="guests" min="1" max="40" value="2" required>
+        </div>
+        <button type="submit">Search</button>
+      </form>
+    </div>
+  </div>
+
+  <main>
+    <h2 class="section-title">Popular destinations</h2>
+    <div class="destinations" id="destinations"></div>
+
+    <h2 class="section-title" id="resultsTitle">All hotels</h2>
+    <div id="status" class="empty-state" style="display:none;"></div>
+    <div class="hotel-grid" id="hotelGrid"></div>
+  </main>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/auth.js"></script>
+  <script>
+    const $location = document.getElementById("location");
+    const $destinations = document.getElementById("destinations");
+    const $hotelGrid = document.getElementById("hotelGrid");
+    const $status = document.getElementById("status");
+    const $resultsTitle = document.getElementById("resultsTitle");
+    const $checkIn = document.getElementById("checkIn");
+    const $checkOut = document.getElementById("checkOut");
+
+    function defaultDates() {
+      const in7 = new Date(); in7.setDate(in7.getDate() + 7);
+      const in9 = new Date(); in9.setDate(in9.getDate() + 9);
+      const iso = (d) => d.toISOString().slice(0, 10);
+      $checkIn.value = iso(in7);
+      $checkOut.value = iso(in9);
+      $checkIn.min = iso(new Date());
+    }
+
+    function money(n) {
+      return "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    }
+
+    async function loadDestinations() {
+      const locations = await Api.get("/api/locations");
+      $destinations.innerHTML = "";
+      for (const loc of locations) {
+        const opt = document.createElement("option");
+        opt.value = loc.city;
+        opt.textContent = loc.city + ", " + loc.region;
+        $location.appendChild(opt);
+
+        const card = document.createElement("div");
+        card.className = "destination-card";
+        card.innerHTML = '<img loading="lazy" src="' + loc.heroImageUrl + '" alt="' + loc.city + '">' +
+          '<div class="label">' + loc.city + '</div>';
+        card.onclick = () => {
+          $location.value = loc.city;
+          document.querySelectorAll(".destination-card").forEach((c) => c.classList.remove("active"));
+          card.classList.add("active");
+          search();
+        };
+        $destinations.appendChild(card);
+      }
+    }
+
+    function hotelCard(hotel) {
+      const div = document.createElement("div");
+      div.className = "hotel-card";
+      const brandBadge = hotel.brand ? '<span class="badge">' + hotel.brand + '</span>' : '<span class="badge">Independent</span>';
+      div.innerHTML =
+        '<div class="photo"><img loading="lazy" src="' + hotel.heroImageUrl + '" alt="' + hotel.name + '"></div>' +
+        '<div class="body">' +
+        brandBadge +
+        '<h3>' + hotel.name + '</h3>' +
+        '<div class="location">' + hotel.city + ', ' + hotel.region + '</div>' +
+        '<div class="price"><div><span class="amount">' + money(hotel.fromNightlyRate) + '</span> <span class="per">/ night</span></div>' +
+        '<button type="button">View Hotel</button></div>' +
+        '</div>';
+      div.querySelector("button").onclick = () => openHotel(hotel.id);
+      return div;
+    }
+
+    function openHotel(hotelId) {
+      const params = new URLSearchParams({
+        hotelId,
+        checkIn: $checkIn.value,
+        checkOut: $checkOut.value,
+        rooms: document.getElementById("rooms").value,
+        guests: document.getElementById("guests").value
+      });
+      // Opens in a new tab so the guest can review everything before reserving.
+      window.open("/hotel.html?" + params.toString(), "_blank");
+    }
+
+    async function search() {
+      $status.style.display = "none";
+      $hotelGrid.innerHTML = "";
+      const city = $location.value;
+      $resultsTitle.textContent = city ? "Hotels in " + city : "All hotels";
+      try {
+        const hotels = await Api.get("/api/hotels" + (city ? "?city=" + encodeURIComponent(city) : ""));
+        if (!hotels.length) {
+          $status.textContent = "No hotels found for that destination yet.";
+          $status.style.display = "";
+          return;
+        }
+        for (const hotel of hotels) {
+          $hotelGrid.appendChild(hotelCard(hotel));
+        }
+      } catch (err) {
+        $status.textContent = "Could not load hotels: " + err.message;
+        $status.style.display = "";
+      }
+    }
+
+    document.getElementById("searchForm").addEventListener("submit", (e) => {
+      e.preventDefault();
+      search();
+    });
+
+    (async function init() {
+      defaultDates();
+      await Auth.refresh();
+      await loadDestinations();
+      await search();
+    })();
+  </script>
+</body>
+</html>

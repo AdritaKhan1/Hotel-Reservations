@@ -1,0 +1,31 @@
+spring:
+  application:
+    name: hotel-booking
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:5432/hotelbooking}
+    username: ${DB_USER:hotel}
+    password: ${DB_PASSWORD:hotel}
+  jpa:
+    hibernate:
+      ddl-auto: validate      # schema is owned by Flyway, not Hibernate
+    open-in-view: false
+    properties:
+      hibernate:
+        format_sql: true
+  flyway:
+    enabled: true
+
+server:
+  # Most PaaS hosts (Render, Railway, Fly, Heroku-style) inject a dynamic PORT
+  # env var and expect the app to bind to it; local/Docker Compose use stays
+  # on 8080 since PORT is unset there.
+  port: ${PORT:8080}
+
+logging:
+  level:
+    org.hibernate.SQL: info
+
+app:
+  # Seeds ~12 demo hotels across 6 Canadian cities on first boot against an
+  # empty database. Set to false to start with a blank inventory instead.
+  seed-demo-data: true

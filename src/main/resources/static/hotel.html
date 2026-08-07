@@ -1,0 +1,325 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>BookCanada</title>
+  <link rel="stylesheet" href="/css/fonts.css">
+  <link rel="stylesheet" href="/css/styles.css">
+</head>
+<body>
+  <header class="site">
+    <div class="header-inner">
+      <a class="brand" href="/index.html"><span class="logo">🏨</span> BookCanada</a>
+      <div class="auth-widget" id="authWidget"></div>
+    </div>
+  </header>
+
+  <main>
+    <div id="loadStatus" class="empty-state">Loading hotel...</div>
+
+    <div id="hotelContent" style="display:none;">
+      <div class="gallery" id="gallery"></div>
+
+      <div class="hotel-header">
+        <span class="badge" id="brandBadge"></span>
+        <h1 id="hotelName"></h1>
+        <div class="location" id="hotelLocation"></div>
+        <div class="amenity-list" id="amenities"></div>
+        <p class="description" id="hotelDescription"></p>
+      </div>
+
+      <h2 class="section-title">Rooms</h2>
+      <div class="room-list" id="roomList"></div>
+    </div>
+  </main>
+
+  <script src="/js/api.js"></script>
+  <script src="/js/auth.js"></script>
+  <script>
+    const params = new URLSearchParams(location.search);
+    const hotelId = params.get("hotelId");
+    const searchDates = { checkIn: params.get("checkIn"), checkOut: params.get("checkOut") };
+    const searchRooms = Math.max(1, parseInt(params.get("rooms") || "1", 10));
+    const searchGuests = Math.max(1, parseInt(params.get("guests") || "2", 10));
+
+    let currentHotel = null;
+
+    function money(n) {
+      return "$" + Number(n).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    }
+
+    function nightsBetween(checkIn, checkOut) {
+      if (!checkIn || !checkOut) return 0;
+      const ms = new Date(checkOut) - new Date(checkIn);
+      return Math.max(0, Math.round(ms / 86400000));
+    }
+
+    function renderGallery(hotel) {
+      const images = [hotel.heroImageUrl, ...hotel.imageUrls].slice(0, 5);
+      const gallery = document.getElementById("gallery");
+      gallery.innerHTML = images.map((src) =>
+        '<a href="' + src + '" target="_blank" rel="noopener"><img loading="lazy" src="' + src + '" alt="' + hotel.name + '"></a>'
+      ).join("");
+    }
+
+    function bedLabel(bedType) {
+      return bedType === "KING" ? "King bed" : bedType === "QUEEN" ? "Queen bed" : "Double bed";
+    }
+
+    function roomCard(hotel, room) {
+      const nights = nightsBetween(searchDates.checkIn, searchDates.checkOut);
+      const total = nights > 0 ? room.nightlyRate * nights * searchRooms : null;
+
+      const div = document.createElement("div");
+      div.className = "room-card";
+      div.innerHTML =
+        '<div class="photo"><img loading="lazy" src="' + room.imageUrl + '" alt="' + room.name + '"></div>' +
+        '<div>' +
+        '  <h4>' + room.name + '</h4>' +
+        '  <div class="specs">' +
+        '    <span class="spec-pill">' + bedLabel(room.bedType) + '</span>' +
+        '    <span class="spec-pill">' + room.bedrooms + ' bedroom' + (room.bedrooms > 1 ? "s" : "") + '</span>' +
+        '    <span class="spec-pill">Sleeps ' + room.maxOccupancy + '</span>' +
+        '    <span class="spec-pill">' + room.viewType + '</span>' +
+        '  </div>' +
+        '  <div class="desc">' + room.description + '</div>' +
+        '</div>' +
+        '<div class="buy">' +
+        '  <div><span class="amount">' + money(room.nightlyRate) + '</span> <span class="per">/ night</span></div>' +
+        (total !== null ? '<div class="per">' + nights + ' night(s) × ' + searchRooms + ' room(s) = ' + money(total) + '</div>' : "") +
+        '  <button type="button">Reserve</button>' +
+        '</div>';
+      div.querySelector("button").onclick = () => requestReserve(room);
+      return div;
+    }
+
+    async function loadHotel() {
+      if (!hotelId) {
+        document.getElementById("loadStatus").textContent = "No hotel specified.";
+        return;
+      }
+      try {
+        currentHotel = await Api.get("/api/hotels/" + hotelId);
+      } catch (err) {
+        document.getElementById("loadStatus").textContent = "Could not load hotel: " + err.message;
+        return;
+      }
+      document.getElementById("loadStatus").style.display = "none";
+      document.getElementById("hotelContent").style.display = "";
+
+      renderGallery(currentHotel);
+      document.getElementById("brandBadge").textContent = currentHotel.brand || "Independent";
+      document.getElementById("hotelName").textContent = currentHotel.name;
+      document.getElementById("hotelLocation").textContent = currentHotel.address + ", " + currentHotel.city + ", " + currentHotel.region;
+      document.getElementById("hotelDescription").textContent = currentHotel.description;
+      document.getElementById("amenities").innerHTML = currentHotel.amenities
+        .map((a) => '<span class="amenity-pill">' + a + '</span>').join("");
+
+      const roomList = document.getElementById("roomList");
+      roomList.innerHTML = "";
+      for (const room of currentHotel.roomTypes) {
+        roomList.appendChild(roomCard(currentHotel, room));
+      }
+
+      document.title = currentHotel.name + " | BookCanada";
+    }
+
+    // ---------- reserve flow: auth gate -> checkout ----------
+
+    function requestReserve(room) {
+      if (!searchDates.checkIn || !searchDates.checkOut || nightsBetween(searchDates.checkIn, searchDates.checkOut) < 1) {
+        alert("Choose check-in and check-out dates from the search page first.");
+        return;
+      }
+      if (!Auth.isAuthenticated()) {
+        sessionStorage.setItem("pendingReservation", JSON.stringify({ roomTypeId: room.id }));
+        Auth.openModal({ onSuccess: resumePendingReservation });
+        return;
+      }
+      openCheckout(room);
+    }
+
+    function resumePendingReservation() {
+      const raw = sessionStorage.getItem("pendingReservation");
+      if (!raw || !currentHotel) return;
+      sessionStorage.removeItem("pendingReservation");
+      const pending = JSON.parse(raw);
+      const room = currentHotel.roomTypes.find((r) => r.id === pending.roomTypeId);
+      if (room) openCheckout(room);
+    }
+
+    function openCheckout(room) {
+      const nights = nightsBetween(searchDates.checkIn, searchDates.checkOut);
+      const total = room.nightlyRate * nights * searchRooms;
+      const user = Auth.current();
+      const thisYear = new Date().getFullYear();
+
+      const backdrop = document.createElement("div");
+      backdrop.className = "modal-backdrop";
+      backdrop.innerHTML =
+        '<div class="modal wide" role="dialog" aria-modal="true">' +
+        '  <button class="close" type="button" aria-label="Close">&times;</button>' +
+        '  <h2>Complete your reservation</h2>' +
+        '  <p class="subtitle">Booking as ' + (user.email || "") + '</p>' +
+        '  <div class="summary-box">' +
+        '    <div class="row"><span>' + currentHotel.name + '</span><span>' + room.name + '</span></div>' +
+        '    <div class="row"><span>' + searchDates.checkIn + ' → ' + searchDates.checkOut + '</span><span>' + nights + ' night(s)</span></div>' +
+        '    <div class="row"><span>' + searchRooms + ' room(s), ' + searchGuests + ' guest(s)</span><span>' + money(room.nightlyRate) + ' / night</span></div>' +
+        '    <div class="row total"><span>Total</span><span>' + money(total) + '</span></div>' +
+        '  </div>' +
+        '  <div id="checkoutAlert"></div>' +
+        '  <form id="checkoutForm">' +
+        '    <div class="form-grid">' +
+        '      <div class="field"><label>First name</label><input name="firstName" required value="' + (user.firstName || "") + '"></div>' +
+        '      <div class="field"><label>Last name</label><input name="lastName" required value="' + (user.lastName || "") + '"></div>' +
+        '      <div class="field span-2"><label>Phone</label><input name="phone" type="tel" placeholder="(416) 555-0100" required></div>' +
+        '      <div class="field span-2"><label>Address</label><input name="addressLine1" placeholder="Street address" required></div>' +
+        '      <div class="field span-2"><input name="addressLine2" placeholder="Apt / suite (optional)"></div>' +
+        '      <div class="field"><label>City</label><input name="city" required></div>' +
+        '      <div class="field"><label>Province / State</label><input name="region" required></div>' +
+        '      <div class="field"><label>Postal / ZIP code</label><input name="postalCode" required></div>' +
+        '      <div class="field"><label>Country</label><input name="country" value="Canada" required></div>' +
+        '      <label class="checkbox-row"><input type="checkbox" name="billingSameAsAddress" checked> Billing address same as above</label>' +
+        '      <div class="field span-2 billing-field" style="display:none;"><label>Billing address</label><input name="billingAddressLine1" placeholder="Street address"></div>' +
+        '      <div class="field billing-field" style="display:none;"><label>Billing city</label><input name="billingCity"></div>' +
+        '      <div class="field billing-field" style="display:none;"><label>Billing province / state</label><input name="billingRegion"></div>' +
+        '      <div class="field billing-field" style="display:none;"><label>Billing postal / ZIP</label><input name="billingPostalCode"></div>' +
+        '      <div class="field billing-field" style="display:none;"><label>Billing country</label><input name="billingCountry" value="Canada"></div>' +
+        '      <div class="field span-2"><label>Name on card</label><input name="cardholderName" required></div>' +
+        '      <div class="field span-2"><label>Card number</label><input name="cardNumber" inputmode="numeric" placeholder="4242 4242 4242 4242" required></div>' +
+        '      <div class="field"><label>Expiry month</label>' +
+        '        <select name="expiryMonth" required>' + monthOptions() + '</select></div>' +
+        '      <div class="field"><label>Expiry year</label>' +
+        '        <select name="expiryYear" required>' + yearOptions(thisYear) + '</select></div>' +
+        '      <div class="field"><label>CVV</label><input name="cvv" inputmode="numeric" maxlength="4" placeholder="123" required></div>' +
+        '    </div>' +
+        '    <button class="full" type="submit" style="margin-top:16px;">Confirm &amp; pay ' + money(total) + '</button>' +
+        '  </form>' +
+        '</div>';
+      document.body.appendChild(backdrop);
+
+      const close = () => backdrop.remove();
+      backdrop.querySelector(".close").onclick = close;
+      backdrop.addEventListener("click", (e) => { if (e.target === backdrop) close(); });
+
+      const billingCheckbox = backdrop.querySelector('input[name="billingSameAsAddress"]');
+      const billingFields = backdrop.querySelectorAll(".billing-field");
+      billingCheckbox.onchange = () => {
+        billingFields.forEach((f) => { f.style.display = billingCheckbox.checked ? "none" : ""; });
+        billingFields.forEach((f) => f.querySelectorAll("input").forEach((i) => { i.required = !billingCheckbox.checked; }));
+      };
+
+      function alertBox(message, kind) {
+        backdrop.querySelector("#checkoutAlert").innerHTML =
+          message ? '<div class="alert ' + (kind || "error") + '">' + message + '</div>' : "";
+      }
+
+      backdrop.querySelector("#checkoutForm").addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const form = e.target;
+        const data = new FormData(form);
+        const cardDigits = (data.get("cardNumber") || "").replace(/\D/g, "");
+        const phone = (data.get("phone") || "").trim();
+
+        if (!/^[+]?[0-9()\-\s]{7,20}$/.test(phone)) {
+          alertBox("Enter a valid phone number.");
+          return;
+        }
+        if (cardDigits.length !== 16) {
+          alertBox("Card number must be 16 digits.");
+          return;
+        }
+        const expiry = new Date(parseInt(data.get("expiryYear"), 10), parseInt(data.get("expiryMonth"), 10) - 1, 1);
+        const endOfExpiryMonth = new Date(expiry.getFullYear(), expiry.getMonth() + 1, 0);
+        if (endOfExpiryMonth < new Date()) {
+          alertBox("This card has expired.");
+          return;
+        }
+
+        const submitBtn = form.querySelector("button[type=submit]");
+        submitBtn.disabled = true;
+        try {
+          const sameAddress = billingCheckbox.checked;
+          const reservation = await Api.post("/api/room-types/" + room.id + "/reservations", {
+            checkIn: searchDates.checkIn,
+            checkOut: searchDates.checkOut,
+            rooms: searchRooms,
+            guests: searchGuests,
+            firstName: data.get("firstName"),
+            lastName: data.get("lastName"),
+            phone,
+            addressLine1: data.get("addressLine1"),
+            addressLine2: data.get("addressLine2"),
+            city: data.get("city"),
+            region: data.get("region"),
+            postalCode: data.get("postalCode"),
+            country: data.get("country"),
+            billingSameAsAddress: sameAddress,
+            billingAddressLine1: sameAddress ? null : data.get("billingAddressLine1"),
+            billingAddressLine2: sameAddress ? null : data.get("billingAddressLine2"),
+            billingCity: sameAddress ? null : data.get("billingCity"),
+            billingRegion: sameAddress ? null : data.get("billingRegion"),
+            billingPostalCode: sameAddress ? null : data.get("billingPostalCode"),
+            billingCountry: sameAddress ? null : data.get("billingCountry"),
+            cardholderName: data.get("cardholderName"),
+            cardNumber: cardDigits,
+            expiryMonth: parseInt(data.get("expiryMonth"), 10),
+            expiryYear: parseInt(data.get("expiryYear"), 10),
+            cvv: data.get("cvv")
+          });
+          showConfirmation(backdrop, reservation);
+        } catch (err) {
+          alertBox(err.message);
+        } finally {
+          submitBtn.disabled = false;
+        }
+      });
+    }
+
+    function showConfirmation(backdrop, reservation) {
+      const modal = backdrop.querySelector(".modal");
+      modal.innerHTML =
+        '<button class="close" type="button" aria-label="Close">&times;</button>' +
+        '<div class="confirmation">' +
+        '  <div class="check">✅</div>' +
+        '  <h2>Reservation confirmed</h2>' +
+        '  <p class="subtitle">Confirmation #' + reservation.id + '</p>' +
+        '  <div class="summary-box" style="text-align:left;">' +
+        '    <div class="row"><span>' + reservation.hotelName + '</span><span>' + reservation.roomTypeName + '</span></div>' +
+        '    <div class="row"><span>' + reservation.checkIn + ' → ' + reservation.checkOut + '</span><span>' + reservation.nights + ' night(s)</span></div>' +
+        '    <div class="row"><span>Card</span><span>' + reservation.cardBrand + ' •••• ' + reservation.cardLast4 + '</span></div>' +
+        '    <div class="row total"><span>Total charged</span><span>' + money(reservation.totalPrice) + '</span></div>' +
+        '  </div>' +
+        '  <button type="button" id="doneBtn">Done</button>' +
+        '</div>';
+      modal.querySelector(".close").onclick = () => backdrop.remove();
+      modal.querySelector("#doneBtn").onclick = () => backdrop.remove();
+    }
+
+    function monthOptions() {
+      let html = "";
+      for (let m = 1; m <= 12; m++) {
+        html += '<option value="' + m + '">' + String(m).padStart(2, "0") + '</option>';
+      }
+      return html;
+    }
+
+    function yearOptions(startYear) {
+      let html = "";
+      for (let y = startYear; y <= startYear + 15; y++) {
+        html += '<option value="' + y + '">' + y + '</option>';
+      }
+      return html;
+    }
+
+    (async function init() {
+      await Auth.refresh();
+      await loadHotel();
+      if (Auth.isAuthenticated()) {
+        resumePendingReservation();
+      }
+    })();
+  </script>
+</body>
+</html>

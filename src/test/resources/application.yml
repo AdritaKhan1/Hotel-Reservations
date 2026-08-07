@@ -1,0 +1,4 @@
+app:
+  # Tests create their own room types/inventory directly; skip the demo
+  # hotel/room-type/inventory seeding so test startup stays fast.
+  seed-demo-data: false
