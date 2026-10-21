@@ -2,7 +2,10 @@ spring:
   application:
     name: hotel-booking
   datasource:
-    url: ${DB_URL:jdbc:postgresql://localhost:5432/hotelbooking}
+    # DB_URL wins if set (Docker Compose); otherwise the URL is assembled from
+    # parts, which is what render.yaml provides since Render's connection
+    # string is postgres://, not JDBC.
+    url: ${DB_URL:jdbc:postgresql://${DB_HOST:localhost}:${DB_PORT:5432}/${DB_NAME:hotelbooking}}
     username: ${DB_USER:hotel}
     password: ${DB_PASSWORD:hotel}
   jpa:

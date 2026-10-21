@@ -1,0 +1,31 @@
+# Render Blueprint: Dashboard -> New -> Blueprint -> pick this repo.
+# Creates the Postgres database and the Docker web service and wires them up.
+databases:
+  - name: book-canada-db
+    plan: free
+    region: oregon
+    databaseName: hotelbooking
+    user: hotel
+
+services:
+  - type: web
+    name: book-canada
+    runtime: docker
+    plan: free
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /
+    envVars:
+      - key: DB_HOST
+        fromDatabase: { name: book-canada-db, property: host }
+      - key: DB_PORT
+        fromDatabase: { name: book-canada-db, property: port }
+      - key: DB_NAME
+        fromDatabase: { name: book-canada-db, property: database }
+      - key: DB_USER
+        fromDatabase: { name: book-canada-db, property: user }
+      - key: DB_PASSWORD
+        fromDatabase: { name: book-canada-db, property: password }
+      # Free instances have 512 MB; keep the JVM heap inside that.
+      - key: JAVA_TOOL_OPTIONS
+        value: -XX:MaxRAMPercentage=75
